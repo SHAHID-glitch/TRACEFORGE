@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TRACEFORGE Repair Passport",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "product",
+    "verification_id",
+    "created_at",
+    "tool_versions",
+    "verification",
+    "project",
+    "patch",
+    "baseline",
+    "patched",
+    "ai_review",
+    "human_approval"
+  ],
+  "properties": {
+    "schema_version": {"const": "2.1"},
+    "product": {"const": "TRACEFORGE"},
+    "verification_id": {"type": "string", "format": "uuid"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "tool_versions": {"type": "object", "additionalProperties": {"type": "string"}},
+    "verification": {
+      "type": "object",
+      "required": ["status", "tests_passed", "complete_correctness"],
+      "properties": {
+        "status": {"enum": ["TESTS_PASSED", "TESTS_FAILED", "PATCH_APPLICATION_FAILED", "UNKNOWN"]},
+        "tests_passed": {"type": "boolean"},
+        "complete_correctness": {"const": "UNKNOWN"}
+      }
+    },
+    "project": {"type": "object"},
+    "patch": {
+      "type": "object",
+      "required": ["filename", "applied", "status", "changed_files"],
+      "properties": {
+        "filename": {"type": "string"},
+        "applied": {"type": "boolean"},
+        "status": {"enum": ["VERIFIED", "FAILED"]},
+        "message": {"type": "string"},
+        "changed_files": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "baseline": {"type": "object"},
+    "patched": {"type": "object"},
+    "ai_review": {
+      "type": "object",
+      "required": ["status", "findings"],
+      "properties": {
+        "status": {"enum": ["SUGGESTED", "UNKNOWN"]},
+        "findings": {"type": "array"},
+        "recommendations": {"type": "array"}
+      }
+    },
+    "human_approval": {
+      "type": "object",
+      "required": ["status", "verification_id", "decision", "decided_at", "ai_review_status"],
+      "properties": {
+        "status": {"enum": ["APPROVED", "REJECTED", "PENDING"]},
+        "verification_id": {"type": "string", "format": "uuid"},
+        "decision": {"enum": ["APPROVED", "REJECTED", "PENDING"]},
+        "decided_at": {"type": ["string", "null"], "format": "date-time"},
+        "ai_review_status": {"enum": ["SUGGESTED", "UNKNOWN"]}
+      }
+    }
+  },
+  "additionalProperties": true
+}
