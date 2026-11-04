@@ -1322,33 +1322,40 @@ def _run_ai_review(
     patched: dict[str, Any],
     patch_applied: bool,
 ) -> dict[str, Any]:
-    provider = os.getenv("TRACEFORGE_AI_REVIEW_PROVIDER", "modal").strip().lower()
+    provider = os.getenv("TRACEFORGE_AI_REVIEW_PROVIDER", "meta").strip().lower()
 
-    if provider not in {"groq", "baseten", "modal"}:
+    if provider not in {"meta", "groq", "baseten", "modal"}:
         return {
             "status": "UNKNOWN",
             "provider": provider,
             "findings": [],
             "recommendations": [],
-            "message": "AI review unavailable: TRACEFORGE_AI_REVIEW_PROVIDER must be groq, baseten, or modal.",
+            "message": "AI review unavailable: unsupported provider.",
         }
 
-    endpoint = (
-        GROQ_AI_REVIEW_URL
-        if provider == "groq"
-        else os.getenv("TRACEFORGE_AI_REVIEW_URL", "").strip()
-    )
+    if provider == "meta":
+        endpoint = "https://api.meta.ai/v1/chat/completions"
+        api_key = os.getenv("MODEL_API_KEY", "").strip()
+        model = "muse-spark-1.3"
+    else:
+        endpoint = (
+            GROQ_AI_REVIEW_URL
+            if provider == "groq"
+            else os.getenv("TRACEFORGE_AI_REVIEW_URL", "").strip()
+        )
+        api_key = os.getenv("TRACEFORGE_AI_REVIEW_API_KEY", "").strip()
+        model = os.getenv("TRACEFORGE_AI_REVIEW_MODEL", "").strip()
 
-    api_key = os.getenv("TRACEFORGE_AI_REVIEW_API_KEY", "").strip()
-    model = os.getenv("TRACEFORGE_AI_REVIEW_MODEL", "").strip()
-
-    if provider == "baseten" and not model:
-        model = DEFAULT_AI_MODEL
+        if provider == "baseten" and not model:
+            model = DEFAULT_AI_MODEL
 
     missing = []
 
     if not api_key:
-        missing.append("TRACEFORGE_AI_REVIEW_API_KEY")
+        missing.append(
+            "MODEL_API_KEY" if provider == "meta"
+            else "TRACEFORGE_AI_REVIEW_API_KEY"
+        )
 
     if provider in {"baseten", "modal"} and not endpoint:
         missing.append("TRACEFORGE_AI_REVIEW_URL")
@@ -1364,7 +1371,6 @@ def _run_ai_review(
             "recommendations": [],
             "message": f"AI review unavailable: configure {', '.join(missing)}.",
         }
-
     if not endpoint.lower().startswith("https://"):
         return {
             "status": "UNKNOWN",
@@ -1408,7 +1414,6 @@ def _run_ai_review(
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
-        "response_format": {"type": "json_object"},
     }).encode("utf-8")
 
     request = urllib.request.Request(
