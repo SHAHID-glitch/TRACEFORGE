@@ -1313,6 +1313,7 @@ def _validate_ai_review(value: Any) -> dict[str, Any]:
     }
 
 
+
 def _run_ai_review(
     patch_data: bytes,
     changed_files: list[str],
@@ -1321,31 +1322,40 @@ def _run_ai_review(
     patched: dict[str, Any],
     patch_applied: bool,
 ) -> dict[str, Any]:
-    provider = os.getenv("TRACEFORGE_AI_REVIEW_PROVIDER", "baseten").strip().lower()
-    if provider not in {"groq", "baseten"}:
+    provider = os.getenv("TRACEFORGE_AI_REVIEW_PROVIDER", "modal").strip().lower()
+
+    if provider not in {"groq", "baseten", "modal"}:
         return {
             "status": "UNKNOWN",
             "provider": provider,
             "findings": [],
             "recommendations": [],
-            "message": "AI review unavailable: TRACEFORGE_AI_REVIEW_PROVIDER must be groq or baseten.",
+            "message": "AI review unavailable: TRACEFORGE_AI_REVIEW_PROVIDER must be groq, baseten, or modal.",
         }
+
     endpoint = (
         GROQ_AI_REVIEW_URL
         if provider == "groq"
         else os.getenv("TRACEFORGE_AI_REVIEW_URL", "").strip()
     )
+
     api_key = os.getenv("TRACEFORGE_AI_REVIEW_API_KEY", "").strip()
     model = os.getenv("TRACEFORGE_AI_REVIEW_MODEL", "").strip()
+
     if provider == "baseten" and not model:
         model = DEFAULT_AI_MODEL
+
     missing = []
+
     if not api_key:
         missing.append("TRACEFORGE_AI_REVIEW_API_KEY")
-    if provider == "baseten" and not endpoint:
+
+    if provider in {"baseten", "modal"} and not endpoint:
         missing.append("TRACEFORGE_AI_REVIEW_URL")
-    if provider == "groq" and not model:
+
+    if provider in {"groq", "modal"} and not model:
         missing.append("TRACEFORGE_AI_REVIEW_MODEL")
+
     if missing:
         return {
             "status": "UNKNOWN",
@@ -1354,6 +1364,7 @@ def _run_ai_review(
             "recommendations": [],
             "message": f"AI review unavailable: configure {', '.join(missing)}.",
         }
+
     if not endpoint.lower().startswith("https://"):
         return {
             "status": "UNKNOWN",
@@ -1362,6 +1373,7 @@ def _run_ai_review(
             "recommendations": [],
             "message": "AI review unavailable: TRACEFORGE_AI_REVIEW_URL must use HTTPS.",
         }
+
     evidence = {
         "language": profile.language,
         "project_root": profile.relative_root,
@@ -1378,6 +1390,7 @@ def _run_ai_review(
             "duration_ms": patched.get("duration_ms", 0),
         },
     }
+
     prompt = (
         "Review this code patch as an independent advisory reviewer. "
         "Identify likely bugs, regressions, security concerns, affected behavior, "
@@ -1390,12 +1403,14 @@ def _run_ai_review(
         f"Measured evidence: {json.dumps(evidence)}\n"
         f"Patch:\n{_patch_review_context(patch_data, changed_files)}"
     )
+
     request_body = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
         "response_format": {"type": "json_object"},
     }).encode("utf-8")
+
     request = urllib.request.Request(
         endpoint,
         data=request_body,
@@ -1406,25 +1421,44 @@ def _run_ai_review(
         },
         method="POST",
     )
+
     try:
-        with urllib.request.urlopen(request, timeout=AI_REVIEW_TIMEOUT_SECONDS) as response:
-            response_data = json.loads(response.read(1_000_000).decode("utf-8"))
-        content = response_data.get("choices", [{}])[0].get("message", {}).get("content")
+        with urllib.request.urlopen(
+            request,
+            timeout=AI_REVIEW_TIMEOUT_SECONDS,
+        ) as response:
+            response_data = json.loads(
+                response.read(1_000_000).decode("utf-8")
+            )
+
+        content = (
+            response_data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content")
+        )
+
         if isinstance(content, str):
             content = json.loads(content)
+
         review = _validate_ai_review(content)
         review["provider"] = provider
         return review
+
     except urllib.error.HTTPError as exc:
         try:
-            provider_error = exc.read(16_384).decode("utf-8", errors="replace")
+            provider_error = exc.read(16_384).decode(
+                "utf-8",
+                errors="replace",
+            )
         except OSError:
             provider_error = ""
+
         sanitized_error = re.sub(
             r"(?i)(authorization|api[_-]?key|token)\s*[:=]\s*[^\s,;]+",
             r"\1=[REDACTED]",
             provider_error,
         )[:1_000]
+
         logger.warning(
             "AI review provider=%s model=%s http_status=%s error=%s",
             provider,
@@ -1432,6 +1466,7 @@ def _run_ai_review(
             exc.code,
             sanitized_error or "provider returned an HTTP error",
         )
+
         return {
             "status": "UNKNOWN",
             "provider": provider,
@@ -1439,13 +1474,22 @@ def _run_ai_review(
             "recommendations": [],
             "message": f"AI review unavailable: provider returned HTTP {exc.code}.",
         }
-    except (OSError, urllib.error.URLError, json.JSONDecodeError, ValueError, KeyError, IndexError) as exc:
+
+    except (
+        OSError,
+        urllib.error.URLError,
+        json.JSONDecodeError,
+        ValueError,
+        KeyError,
+        IndexError,
+    ) as exc:
         logger.warning(
             "AI review provider=%s model=%s error=%s",
             provider,
             model,
             str(exc)[:500],
         )
+
         return {
             "status": "UNKNOWN",
             "provider": provider,

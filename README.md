@@ -31,27 +31,27 @@ Upload your original project and a proposed patch. TRACEFORGE:
 
 Currently supported verification profiles: **Python and Node.js**.
 
-### Meta AI model direction
+Meta AI integration
 
-TRACEFORGE includes a configurable AI review provider.
+TRACEFORGE is designed to use Meta Muse Spark 1.3 through the official Meta Model API.
 
-Our hackathon target model is:
+Model: muse-spark-1.3
 
-**Meta Muse Spark Open**
-`meta-models/muse-spark-open-1026`
+API base URL: https://api.meta.ai/v1
 
-The intended integration is through a configured Baseten HTTPS inference endpoint. The model reviews patch information and test summaries and returns structured suggestions.
+Chat Completions endpoint: https://api.meta.ai/v1/chat/completions
 
-**Important:** The Muse Spark Open endpoint must be configured and successfully tested before claiming a live Meta model demonstration. Our demonstrated AI review has used Groq; the Meta model integration is a separate target.
+The Meta model provides an additional AI review layer that analyzes patch information and test summaries and returns structured suggestions.
 
-Example configuration:
+Configure the following environment variables:
 
-```powershell
-$env:TRACEFORGE_AI_REVIEW_PROVIDER="baseten"
-$env:TRACEFORGE_AI_REVIEW_URL="YOUR_BAS​​ETEN_HTTPS_ENDPOINT"
-$env:TRACEFORGE_AI_REVIEW_API_KEY="YOUR_API_KEY"
-$env:TRACEFORGE_AI_REVIEW_MODEL="meta-models/muse-spark-open-1026"
-```
+$env:TRACEFORGE_AI_REVIEW_PROVIDER="meta"
+$env:MODEL_API_KEY="YOUR_META_API_KEY"
+$env:TRACEFORGE_AI_REVIEW_MODEL="muse-spark-1.3"
+
+Keep your API key private. Never commit API keys or other secrets to GitHub.
+
+Important: AI review is advisory. AI-generated suggestions remain SUGGESTED until independently checked. A successful API connection alone does not mean a patch is verified.
 
 ### Evidence you can understand
 
