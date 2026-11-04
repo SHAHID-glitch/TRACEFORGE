@@ -31,7 +31,7 @@ Upload your original project and a proposed patch. TRACEFORGE:
 
 Currently supported verification profiles: **Python and Node.js**.
 
-Meta AI integration
+### Meta AI integration
 
 TRACEFORGE is designed to use Meta Muse Spark 1.3 through the official Meta Model API.
 
