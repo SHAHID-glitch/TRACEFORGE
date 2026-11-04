@@ -1314,6 +1314,7 @@ def _validate_ai_review(value: Any) -> dict[str, Any]:
 
 
 
+
 def _run_ai_review(
     patch_data: bytes,
     changed_files: list[str],
@@ -1322,7 +1323,10 @@ def _run_ai_review(
     patched: dict[str, Any],
     patch_applied: bool,
 ) -> dict[str, Any]:
-    provider = os.getenv("TRACEFORGE_AI_REVIEW_PROVIDER", "meta").strip().lower()
+
+    provider = os.getenv(
+        "TRACEFORGE_AI_REVIEW_PROVIDER", "meta"
+    ).strip().lower()
 
     if provider not in {"meta", "groq", "baseten", "modal"}:
         return {
@@ -1333,18 +1337,33 @@ def _run_ai_review(
             "message": "AI review unavailable: unsupported provider.",
         }
 
+    # Configure the primary provider.
     if provider == "meta":
         endpoint = "https://api.meta.ai/v1/chat/completions"
         api_key = os.getenv("MODEL_API_KEY", "").strip()
         model = "muse-spark-1.3"
+
+    elif provider == "groq":
+        endpoint = GROQ_AI_REVIEW_URL
+        api_key = (
+            os.getenv("GROQ_API_KEY")
+            or os.getenv("TRACEFORGE_AI_REVIEW_API_KEY", "")
+        ).strip()
+        model = os.getenv(
+            "TRACEFORGE_AI_REVIEW_MODEL",
+            "openai/gpt-oss-20b",
+        ).strip()
+
     else:
-        endpoint = (
-            GROQ_AI_REVIEW_URL
-            if provider == "groq"
-            else os.getenv("TRACEFORGE_AI_REVIEW_URL", "").strip()
-        )
-        api_key = os.getenv("TRACEFORGE_AI_REVIEW_API_KEY", "").strip()
-        model = os.getenv("TRACEFORGE_AI_REVIEW_MODEL", "").strip()
+        endpoint = os.getenv(
+            "TRACEFORGE_AI_REVIEW_URL", ""
+        ).strip()
+        api_key = os.getenv(
+            "TRACEFORGE_AI_REVIEW_API_KEY", ""
+        ).strip()
+        model = os.getenv(
+            "TRACEFORGE_AI_REVIEW_MODEL", ""
+        ).strip()
 
         if provider == "baseten" and not model:
             model = DEFAULT_AI_MODEL
@@ -1353,7 +1372,8 @@ def _run_ai_review(
 
     if not api_key:
         missing.append(
-            "MODEL_API_KEY" if provider == "meta"
+            "MODEL_API_KEY"
+            if provider == "meta"
             else "TRACEFORGE_AI_REVIEW_API_KEY"
         )
 
@@ -1369,15 +1389,18 @@ def _run_ai_review(
             "provider": provider,
             "findings": [],
             "recommendations": [],
-            "message": f"AI review unavailable: configure {', '.join(missing)}.",
+            "message": (
+                f"AI review unavailable: configure {', '.join(missing)}."
+            ),
         }
+
     if not endpoint.lower().startswith("https://"):
         return {
             "status": "UNKNOWN",
             "provider": provider,
             "findings": [],
             "recommendations": [],
-            "message": "AI review unavailable: TRACEFORGE_AI_REVIEW_URL must use HTTPS.",
+            "message": "AI review unavailable: HTTPS endpoint required.",
         }
 
     evidence = {
@@ -1399,109 +1422,174 @@ def _run_ai_review(
 
     prompt = (
         "Review this code patch as an independent advisory reviewer. "
-        "Identify likely bugs, regressions, security concerns, affected behavior, "
-        "and missing tests. Compare the patch with the measured evidence. "
-        "Never claim tests or correctness are verified. Return only JSON with this shape: "
-        '{"findings":[{"severity":"LOW|MEDIUM|HIGH|CRITICAL","title":"",'
-        '"explanation":"","files":[],"confidence":"LOW|MEDIUM|HIGH"}],'
+        "Identify likely bugs, regressions, security concerns, affected "
+        "behavior, and missing tests. Compare the patch with measured "
+        "evidence. Never claim correctness is verified. "
+        "Return only valid JSON, without Markdown fences, using this shape: "
+        '{"findings":[{"severity":"LOW|MEDIUM|HIGH|CRITICAL",'
+        '"title":"","explanation":"","files":[],'
+        '"confidence":"LOW|MEDIUM|HIGH"}],'
         '"recommendations":[""]}. '
         f"Changed files: {json.dumps(changed_files)}\n"
         f"Measured evidence: {json.dumps(evidence)}\n"
         f"Patch:\n{_patch_review_context(patch_data, changed_files)}"
     )
 
-    request_body = json.dumps({
+    # Prepare primary attempt.
+    attempts = [{
+        "provider": provider,
+        "endpoint": endpoint,
+        "api_key": api_key,
         "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0,
-    }).encode("utf-8")
+    }]
 
-    request = urllib.request.Request(
-        endpoint,
-        data=request_body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "TRACEFORGE/2.0 (AI Patch Review)",
-        },
-        method="POST",
-    )
+    # Meta is primary; Groq is an optional fallback.
+    if provider == "meta":
+        groq_key = (
+            os.getenv("GROQ_API_KEY")
+            or os.getenv("TRACEFORGE_AI_REVIEW_API_KEY", "")
+        ).strip()
 
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=AI_REVIEW_TIMEOUT_SECONDS,
-        ) as response:
-            response_data = json.loads(
-                response.read(1_000_000).decode("utf-8")
-            )
+        if groq_key:
+            attempts.append({
+                "provider": "groq",
+                "endpoint": GROQ_AI_REVIEW_URL,
+                "api_key": groq_key,
+                "model": os.getenv(
+                    "TRACEFORGE_AI_REVIEW_MODEL",
+                    "openai/gpt-oss-20b",
+                ).strip(),
+            })
 
-        content = (
-            response_data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content")
+    last_error = "AI review could not be completed."
+
+    for attempt in attempts:
+        current_provider = attempt["provider"]
+        current_endpoint = attempt["endpoint"]
+        current_key = attempt["api_key"]
+        current_model = attempt["model"]
+
+        if not current_endpoint.lower().startswith("https://"):
+            last_error = "Provider endpoint must use HTTPS."
+            continue
+
+        payload = {
+            "model": current_model,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0,
+        }
+
+        if current_provider == "groq":
+            payload["max_completion_tokens"] = 2048
+            payload["response_format"] = {
+                "type": "json_object"
+            }
+
+        elif current_provider == "meta":
+            payload["max_tokens"] = 2048
+
+        request_body = json.dumps(payload).encode("utf-8")
+
+        request = urllib.request.Request(
+            current_endpoint,
+            data=request_body,
+            headers={
+                "Authorization": f"Bearer {current_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "TRACEFORGE/2.0 (AI Patch Review)",
+            },
+            method="POST",
         )
 
-        if isinstance(content, str):
-            content = json.loads(content)
-
-        review = _validate_ai_review(content)
-        review["provider"] = provider
-        return review
-
-    except urllib.error.HTTPError as exc:
         try:
-            provider_error = exc.read(16_384).decode(
-                "utf-8",
-                errors="replace",
+            with urllib.request.urlopen(
+                request,
+                timeout=AI_REVIEW_TIMEOUT_SECONDS,
+            ) as response:
+                raw_response = response.read(1_000_000).decode(
+                    "utf-8",
+                    errors="replace",
+                )
+
+            if not raw_response.strip():
+                raise ValueError("Provider returned an empty response.")
+
+            response_data = json.loads(raw_response)
+
+            choices = response_data.get("choices") or []
+
+            if not choices:
+                raise ValueError("Provider returned no choices.")
+
+            choice = choices[0]
+
+            if choice.get("finish_reason") == "length":
+                raise ValueError("AI response was truncated.")
+
+            message = choice.get("message") or {}
+            content = message.get("content")
+
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("Provider returned empty AI content.")
+
+            # Remove accidental Markdown JSON fences.
+            content = content.strip()
+
+            if content.startswith("```"):
+                content = re.sub(
+                    r"^```(?:json)?\s*|\s*```$",
+                    "",
+                    content,
+                    flags=re.IGNORECASE,
+                ).strip()
+
+            review_data = json.loads(content)
+
+            review = _validate_ai_review(review_data)
+            review["provider"] = current_provider
+
+            if current_provider != provider:
+                review["fallback_used"] = True
+
+            return review
+
+        except urllib.error.HTTPError as exc:
+            last_error = f"HTTP {exc.code}"
+            logger.warning(
+                "AI review provider=%s model=%s http_status=%s",
+                current_provider,
+                current_model,
+                exc.code,
             )
-        except OSError:
-            provider_error = ""
 
-        sanitized_error = re.sub(
-            r"(?i)(authorization|api[_-]?key|token)\s*[:=]\s*[^\s,;]+",
-            r"\1=[REDACTED]",
-            provider_error,
-        )[:1_000]
+        except (
+            OSError,
+            urllib.error.URLError,
+            json.JSONDecodeError,
+            ValueError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as exc:
+            last_error = str(exc)[:300]
 
-        logger.warning(
-            "AI review provider=%s model=%s http_status=%s error=%s",
-            provider,
-            model,
-            exc.code,
-            sanitized_error or "provider returned an HTTP error",
-        )
+            logger.warning(
+                "AI review provider=%s model=%s error=%s",
+                current_provider,
+                current_model,
+                last_error,
+            )
 
-        return {
-            "status": "UNKNOWN",
-            "provider": provider,
-            "findings": [],
-            "recommendations": [],
-            "message": f"AI review unavailable: provider returned HTTP {exc.code}.",
-        }
+    return {
+        "status": "UNKNOWN",
+        "provider": provider,
+        "findings": [],
+        "recommendations": [],
+        "message": f"AI review unavailable: {last_error}",
+    }
 
-    except (
-        OSError,
-        urllib.error.URLError,
-        json.JSONDecodeError,
-        ValueError,
-        KeyError,
-        IndexError,
-    ) as exc:
-        logger.warning(
-            "AI review provider=%s model=%s error=%s",
-            provider,
-            model,
-            str(exc)[:500],
-        )
-
-        return {
-            "status": "UNKNOWN",
-            "provider": provider,
-            "findings": [],
-            "recommendations": [],
-            "message": f"AI review unavailable: {str(exc)[:500]}",
-        }
 
 
 @app.get("/health")
